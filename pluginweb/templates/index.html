@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PluginWeb</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="logo"></div>
+  <h1>PluginWeb</h1>
+  <span class="tag">插件运行环境</span>
+</header>
+<div class="layout">
+  <nav id="tabs">
+    <button data-tab="plugins" class="active">插件管理</button>
+    <button data-tab="import">导入插件</button>
+    <button data-tab="run">运行插件</button>
+    <button data-tab="shell">Shell 终端</button>
+  </nav>
+  <main>
+    <section id="tab-plugins" class="tab active">
+      <h2>已安装插件</h2>
+      <div class="row"><button class="btn ghost" id="refresh">刷新列表</button></div>
+      <ul id="plugin-list"></ul>
+    </section>
+    <section id="tab-import" class="tab">
+      <h2>导入插件</h2>
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="file" accept=".xfpe,.xfpn" hidden>
+        <div class="dz-icon">＋</div>
+        <div class="dz-title">选择或拖入插件包</div>
+        <div class="dz-sub">支持 .xfpe / .xfpn，选中后自动导入</div>
+      </label>
+      <pre id="import-out"></pre>
+    </section>
+    <section id="tab-run" class="tab">
+      <h2>运行插件</h2>
+      <ul id="run-list"></ul>
+      <pre id="run-out"></pre>
+    </section>
+    <section id="tab-shell" class="tab">
+      <h2>Shell 终端</h2>
+      <div class="row">
+        <input id="cmd" placeholder="输入 shell 命令">
+        <button class="btn" id="exec">执行</button>
+      </div>
+      <pre id="shell-out"></pre>
+    </section>
+  </main>
+</div>
+<script>
+document.querySelectorAll('#tabs button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('#tabs button').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    document.getElementById('tab-' + b.dataset.tab).classList.add('active');
+    if (b.dataset.tab === 'run') loadRunList();
+  };
+});
+function envBadge(env) {
+  const map = {Python: 'py', shell: 'sh', JAVA: 'java', PHP: 'php'};
+  const cls = map[env] || '';
+  return `<span class="badge ${cls}">${env || '未知'}</span>`;
+}
+function renderOutput(el, j) {
+  el.className = '';
+  let parts = [];
+  if (j.error) {
+    el.className = 'err';
+    parts.push('[错误] ' + j.error);
+  } else {
+    if (j.entry) parts.push('入口: ' + j.entry);
+    if (j.stdout) parts.push(j.stdout.replace(/\n$/, ''));
+    if (j.stderr) {
+      el.className = 'err';
+      parts.push('[stderr]\n' + j.stderr.replace(/\n$/, ''));
+    }
+    if (typeof j.returncode === 'number') parts.push('[返回码] ' + j.returncode);
+    if (j.error === undefined && j.stdout === undefined && j.stderr === undefined) {
+      parts.push(JSON.stringify(j, null, 2));
+    }
+  }
+  el.textContent = parts.join('\n');
+}
+async function loadPlugins() {
+  const r = await fetch('/api/plugins');
+  const data = await r.json();
+  const ul = document.getElementById('plugin-list');
+  ul.innerHTML = '';
+  if (!data.length) {
+    ul.innerHTML = '<li class="empty">暂无插件</li>';
+    return;
+  }
+  data.forEach(p => {
+    const li = document.createElement('li');
+    li.className = 'plugin-card';
+    li.innerHTML = `
+      <div>
+        <div class="name">${p.name} <span class="badge">${p.id}</span></div>
+        <div class="meta">v${p.version} · 作者 ${p.author} · 依赖 ${p.rely_on || '无'} · 冲突 ${p.not_compatible || '无'}</div>
+      </div>
+      <div>${envBadge(p.environment)}</div>`;
+    ul.appendChild(li);
+  });
+}
+async function loadRunList() {
+  const r = await fetch('/api/plugins');
+  const data = await r.json();
+  const ul = document.getElementById('run-list');
+  ul.innerHTML = '';
+  if (!data.length) {
+    ul.innerHTML = '<li class="empty">暂无插件</li>';
+    return;
+  }
+  data.forEach(p => {
+    const li = document.createElement('li');
+    li.className = 'plugin-card';
+    li.innerHTML = `
+      <div>
+        <div class="name">${p.name} <span class="badge">${p.id}</span></div>
+        <div class="meta">v${p.version} · 作者 ${p.author}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        ${envBadge(p.environment)}
+        <button class="btn run-one" data-id="${p.id}">运行</button>
+      </div>`;
+    ul.appendChild(li);
+  });
+  ul.querySelectorAll('.run-one').forEach(btn => {
+    btn.onclick = async () => {
+      const pid = btn.dataset.id;
+      btn.disabled = true;
+      const out = document.getElementById('run-out');
+      out.className = '';
+      out.textContent = '运行中...';
+      const r = await fetch('/api/run/' + encodeURIComponent(pid), {method: 'POST'});
+      const j = await r.json();
+      renderOutput(out, j);
+      btn.disabled = false;
+    };
+  });
+}
+async function doImport(file) {
+  const out = document.getElementById('import-out');
+  out.className = '';
+  out.textContent = '导入中...';
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch('/api/import', {method: 'POST', body: fd});
+  const j = await r.json();
+  out.className = j.ok ? '' : 'err';
+  out.textContent = j.msg;
+  if (j.ok) loadPlugins();
+}
+document.getElementById('refresh').onclick = loadPlugins;
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('file');
+fileInput.onchange = () => {
+  if (fileInput.files[0]) doImport(fileInput.files[0]);
+};
+['dragover', 'dragenter'].forEach(ev => dropzone.addEventListener(ev, e => {
+  e.preventDefault();
+  dropzone.classList.add('drag');
+}));
+['dragleave', 'drop'].forEach(ev => dropzone.addEventListener(ev, e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag');
+}));
+dropzone.addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (f) doImport(f);
+});
+document.getElementById('exec').onclick = async () => {
+  const cmd = document.getElementById('cmd').value;
+  if (!cmd) return;
+  const r = await fetch('/api/shell', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({cmd})
+  });
+  const j = await r.json();
+  const out = document.getElementById('shell-out');
+  renderOutput(out, j);
+};
+loadPlugins();
+</script>
+</body>
+</html>
